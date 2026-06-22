@@ -1,4 +1,4 @@
-// Minimal FaaS handler (Rust): read all of stdin, uppercase it, write to stdout.
+// uppercase: read all of stdin (UTF-8), uppercase it, write to stdout.
 // Entry contract: argv/stdin in, stdout/stderr out (WASI command).
 use std::io::{self, Read, Write};
 
