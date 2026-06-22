@@ -38,6 +38,18 @@
 | rot13 | Rust | `rust/rot13` | ASCII 英字を ROT13 変換 |
 | reverse | Go (TinyGo) | `go/reverse` | 入力を rune 単位で逆順に |
 | wordcount | C | `c/wordcount` | 行数・単語数・バイト数を `lines words bytes` 形式で出力 |
+| vibration-fft | Rust | `rust/vibration-fft` | 振動波形を FFT 解析し異常判定（EdgeFaaS デモ・CPU バウンド） |
+
+### vibration-fft（EdgeFaaS デモ用・現場前処理）
+
+予知保全の現場前処理を模した CPU バウンド関数。`ingress(大きい生波形) → runtime(FFT 解析) → egress(小さな結果)` を体現する。
+
+- **入力**: 加速度の生波形（comma/空白区切りの float・例 4096 点 ≒ 32KB）
+- **処理**: 位相シフトした窓を `channels` 個 FFT し、RMS / peak / 主要周波数 / peakiness（突出度）を算出。最も peaky な窓で異常判定
+- **出力**: `{"n":..,"channels":..,"rms":..,"peak":..,"dom_hz":..,"peakiness":..,"anomaly":..,"anomaly_channels":..}`（~110B）
+- **データ削減**: 32KB → ~110B ≈ 300x（ingress/egress 分離で現場前処理＝送信量削減）
+- **引数（args）**: `<fs> <channels>` — `fs`=サンプルレート Hz（既定 1000）、`channels`=解析窓/軸数（既定 1）。**CPU は channels × O(n log n)** で線形に増えるので、入力を増やさず 1 呼び出しの負荷を校正できる（ランタイム限界の量試験用）
+- 例: 異常波形（58.6Hz 強周期）→ `dom_hz≈58.6, peakiness≫8, anomaly=true` / 広帯域ノイズ → `anomaly=false`
 
 取り込み URL の例（uppercase）:
 
