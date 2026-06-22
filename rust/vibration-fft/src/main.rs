@@ -4,12 +4,40 @@
 // This is the "ingress(large raw) -> runtime(reduce) -> egress(small result)" pattern:
 // ~32KB waveform in, ~60B verdict out. Entry contract: argv/stdin in, stdout/stderr out.
 //
-// argv[1] (optional): sample rate in Hz (default 1000). dom_hz = dom_bin * fs / n.
-// argv[2] (optional): channels = number of analysis windows / axes to process per call
-//   (default 1). CPU scales as channels * O(n log n); use it to dial per-invocation load
-//   without growing the input payload. Each channel analyses a phase-shifted view of the
-//   capture (overlapping window), and the worst (most peaky) channel drives the verdict.
+// Parameters (fs = sample rate Hz, channels = analysis windows/axes per call) can be given
+// two ways so every transport works:
+//   - argv:        `<fs> <channels>`  (HTTP sync/async carry argv)
+//   - stdin header: an optional first line containing `=` tokens, e.g. `fs=1000 channels=256`
+//     followed by the waveform. MQTT carries only the payload as stdin (no argv), so the
+//     header is how MQTT invocations dial the load. Leading `#` is allowed.
+// Precedence: defaults < stdin header < argv (argv wins when present).
+// channels scales CPU as channels * O(n log n): each channel analyses a phase-shifted view
+// of the capture (overlapping window); the worst (most peaky) channel drives the verdict.
 use std::io::{self, Read, Write};
+
+// parse_header reads `fs=`/`channels=` (alias `ch=`) tokens from a header line into the refs.
+fn parse_header(line: &str, fs: &mut f64, channels: &mut usize) {
+    for tok in line
+        .trim_start_matches('#')
+        .split(|c: char| c.is_whitespace() || c == ',')
+    {
+        if let Some((k, v)) = tok.split_once('=') {
+            match k.trim() {
+                "fs" => {
+                    if let Ok(x) = v.trim().parse() {
+                        *fs = x;
+                    }
+                }
+                "channels" | "ch" => {
+                    if let Ok(x) = v.trim().parse() {
+                        *channels = x;
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+}
 
 // analyze runs one FFT pass over a phase-shifted view of samples and returns
 // (rms, peak, dom_hz, peakiness, anomaly) for that window.
@@ -91,20 +119,34 @@ fn fft(re: &mut [f64], im: &mut [f64]) {
 }
 
 fn main() {
-    let mut args = std::env::args().skip(1);
-    let fs: f64 = args.next().and_then(|s| s.parse().ok()).unwrap_or(1000.0);
-    let channels: usize = args
-        .next()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(1)
-        .clamp(1, 1_000_000);
+    let mut fs: f64 = 1000.0;
+    let mut channels: usize = 1;
 
     let mut input = String::new();
     if io::stdin().read_to_string(&mut input).is_err() {
         std::process::exit(1);
     }
 
-    let mut samples: Vec<f64> = input
+    // optional stdin header (first line with '=' tokens) — the only param path for MQTT.
+    let body: &str = match input.split_once('\n') {
+        Some((first, rest)) if first.contains('=') => {
+            parse_header(first, &mut fs, &mut channels);
+            rest
+        }
+        _ => input.as_str(),
+    };
+
+    // argv overrides the header when present (HTTP carries argv; MQTT does not).
+    let mut args = std::env::args().skip(1);
+    if let Some(x) = args.next().and_then(|s| s.parse().ok()) {
+        fs = x;
+    }
+    if let Some(x) = args.next().and_then(|s| s.parse().ok()) {
+        channels = x;
+    }
+    channels = channels.clamp(1, 1_000_000);
+
+    let mut samples: Vec<f64> = body
         .split(|c: char| c == ',' || c.is_whitespace())
         .filter(|t| !t.is_empty())
         .filter_map(|t| t.parse::<f64>().ok())

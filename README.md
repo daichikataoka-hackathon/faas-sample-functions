@@ -48,7 +48,15 @@
 - **処理**: 位相シフトした窓を `channels` 個 FFT し、RMS / peak / 主要周波数 / peakiness（突出度）を算出。最も peaky な窓で異常判定
 - **出力**: `{"n":..,"channels":..,"rms":..,"peak":..,"dom_hz":..,"peakiness":..,"anomaly":..,"anomaly_channels":..}`（~110B）
 - **データ削減**: 32KB → ~110B ≈ 300x（ingress/egress 分離で現場前処理＝送信量削減）
-- **引数（args）**: `<fs> <channels>` — `fs`=サンプルレート Hz（既定 1000）、`channels`=解析窓/軸数（既定 1）。**CPU は channels × O(n log n)** で線形に増えるので、入力を増やさず 1 呼び出しの負荷を校正できる（ランタイム限界の量試験用）
+- **パラメータ**（`fs`=サンプルレート Hz・既定 1000 / `channels`=解析窓・軸数・既定 1）は 2 通りで渡せる。**CPU は channels × O(n log n)** で線形に増えるので、入力を増やさず 1 呼び出しの負荷を校正できる（ランタイム限界の量試験用）:
+  - **argv**: `<fs> <channels>`（HTTP sync/async は argv を運ぶ）
+  - **stdin ヘッダ**: 波形の前に `=` を含む 1 行を置く（例 `fs=1000 channels=256`・先頭 `#` 可・`ch=` エイリアス可）。**MQTT は payload=stdin のみで argv を運ばない**ため、MQTT で負荷を校正する唯一の方法
+  - 優先順位: 既定 < stdin ヘッダ < argv（argv があれば優先）
+- 入力例（stdin ヘッダ付き・MQTT でも有効）:
+  ```
+  fs=1000 channels=256
+  0.012,0.034,-0.021, ... (波形)
+  ```
 - 例: 異常波形（58.6Hz 強周期）→ `dom_hz≈58.6, peakiness≫8, anomaly=true` / 広帯域ノイズ → `anomaly=false`
 
 取り込み URL の例（uppercase）:
